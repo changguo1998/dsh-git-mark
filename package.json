@@ -1,6 +1,6 @@
 {
   "name": "dsh-git-mark",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "在 Markdown 文档预览中标注相对上次提交(HEAD)的改动：删除=红色删除线，新增=绿色，整行删除=红色删除线重现。",
   "type": "module",
   "main": "lib/index.js",

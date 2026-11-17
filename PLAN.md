@@ -46,7 +46,7 @@
 ## 4. 已建文件（骨架，位于工作区）
 ```
 <workspace>/plugins/dsh-git-mark/
-├─ package.json    包名 dsh-git-mark v0.1.0；main:lib/index.js；dsh.bundle.patch；dsh.client.inject
+├─ package.json    包名 dsh-git-mark v0.2.0；main:lib/index.js；dsh.bundle.patch；dsh.client.inject
 ├─ cordis.patch.yml 只 insert 一行 id:git-mark name:dsh-git-mark
 ├─ README.md       安装/效果/局限简介
 ├─ PLAN.md         本文档
@@ -69,7 +69,7 @@
 - Body 组件（React jsx() 手写，不用 TSX）：接收 DocumentPreviewProps；用 content.text（累计文本）+ useResource 得 absolutePath；用 parseFileAddress 从 dsh-resource://file/session/<sid>/<path> 得出 sessionId+path；fetch /api/git-mark；调 inject() 生成注入文本 → 交给 MarkdownText（labels 提供最小集：copyLabel/copiedLabel/codeToolbar(标题/换行/取消换行)/footnotes）。
 - inject.js（纯函数，可单测）：
   - 按 \n 分行；跟踪代码围栏状态（fence 内不注入）。
-  - modified：oldText vs newText 做**字符级 LCS**（按 Unicode 码点，中文逐字）→ 合并文本：删除段 `~~…~~`、新增段 `*…*`、未变原样；用合并文本整行替换。
+  - modified：oldText vs newText 做**字符级 LCS**（按 Unicode 码点，中文逐字）→ 合并文本：删除段 `~~…~~`、新增段 `*…*`、未变原样；用合并文本整行替换。**表格行例外**（行首 `|`）：先按 `|` 分段、逐段 del/add、`|` 分隔符保持裸奔（`mergeTableRow`）；**分隔行**（每段都是 `:?-+:?`）永不标注。这样加列/删列/改单元格都不会把 `|` 关进标记导致整表失效。
   - added：整行包 `*…*`；若行首像块语法（#、>、- 、列表序号、围栏等）则跳过该行（最小守卫）。
   - deleted（整行删）：在**空行分隔的安全边界**插独立段 `~~原行内容~~`；非安全边界跳过。
   - 刷新：content 文本变化重算注入；文件 version 变化重拉 git 数据。
@@ -97,6 +97,7 @@
 - raw HTML 无法用于标注（渲染器不解析成元素）。
 - client 改动需要重装插件 + 重启，没有热更新。
 - 整行删除若锚点不在空行边界则跳过。
+- 表格行按 `|` 分段标注；被删整列无位置可展示红色；只改分隔行（如列对齐）无任何标注。
 - v0.1 为纯 JS 无 TS 类型；无 esbuild/tsc 构建链的环境下不需要构建。
 
 ## 8. 参考资料（源码位置，仅供实现比对，勿修改）

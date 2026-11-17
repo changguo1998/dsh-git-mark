@@ -113,6 +113,77 @@ function isBlockLine(line) {
 }
 
 /**
+ * Whether a line is a table row by the simple detection rule: it starts with `|`.
+ * The pipe character is a cell separator in GFM, so table rows are never marked
+ * across a `|` — every mark is confined to one segment (see markTableRow /
+ * mergeTableRow).
+ */
+function isTableLine(line) {
+  return typeof line === 'string' && line.startsWith('|')
+}
+
+/**
+ * Whether a line is a GFM table delimiter row: every non-blank `|`-separated
+ * segment holds only `:` and `-`. A delimiter row MUST stay completely
+ * unmarked — any mark inside a delimiter cell (even one that leaves every
+ * `|` bare) makes the whole table unparseable.
+ */
+function isDelimiterRow(line) {
+  let found = false
+  for (const segment of String(line).split('|')) {
+    const cell = segment.trim()
+    if (cell === '') continue
+    if (!/^:?-+:?$/.test(cell)) return false
+    found = true
+  }
+  return found
+}
+
+/**
+ * Mark a whole table row segment-by-segment (pure add or pure delete of a row):
+ * every non-empty `|`-separated segment gets its own mark while the `|`
+ * separators stay literal, so the table syntax survives.
+ * @param line - the table row to mark.
+ * @param mode - `'md'` or `'html'`.
+ * @param kind - `'add'` or `'del'`.
+ * @returns the marked row.
+ */
+function markTableRow(line, mode, kind) {
+  return String(line).split('|')
+    .map((segment) => {
+      const cell = segment.trim()
+      return cell === '' ? '' : markRun(cell, mode, kind)
+    })
+    .join('|')
+}
+
+/**
+ * Merge a modified table row segment-by-segment. Each old/new `|`-segment pair
+ * becomes `del`+`add`; equal segments stay literal; an added segment becomes a
+ * single `add`; a removed segment has no slot in the new row and is dropped
+ * (never emitting a phantom cell). The `|` separators of the NEW row stay bare.
+ * @param oldRow - the row before the change.
+ * @param newRow - the current row.
+ * @param mode - `'md'` or `'html'`.
+ * @returns the merged row.
+ */
+function mergeTableRow(oldRow, newRow, mode) {
+  const oldParts = String(oldRow).split('|')
+  const newParts = String(newRow).split('|')
+  const out = []
+  for (let i = 0; i < newParts.length; i++) {
+    const oldCell = (oldParts[i] ?? '').trim()
+    const newCell = newParts[i].trim()
+    if (oldCell === '' && newCell === '') { out.push(''); continue }
+    if (oldCell === newCell) { out.push(newParts[i]); continue }
+    if (oldCell === '') { out.push(markRun(newCell, mode, 'add')); continue }
+    if (newCell === '') { out.push(''); continue }
+    out.push(markRun(oldCell, mode, 'del') + markRun(newCell, mode, 'add'))
+  }
+  return out.join('|')
+}
+
+/**
  * Merge one old line and one new line into marked inline Markdown using a
  * character-level LCS. Deleted characters become `~~…~~`, added characters
  * `*…*`, unchanged characters stay literal.
@@ -271,7 +342,10 @@ function injectMarks(text, data, mode) {
     const fence = { active: false, kind: '' }
     return src.map((line) => {
       if (isFenceLine(line)) toggleFence(fence, line)
-      if (fence.active || isFenceLine(line) || isBlockLine(line)) return line
+      if (fence.active || isFenceLine(line)) return line
+      // Table rows are marked per segment (delimiter rows never marked).
+      if (isTableLine(line)) return isDelimiterRow(line) ? line : markTableRow(line, mode, 'add')
+      if (isBlockLine(line)) return line
       return markRun(line, mode, 'add')
     }).join('\n')
   }
@@ -298,7 +372,7 @@ function injectMarks(text, data, mode) {
   const pushDeletion = (entry) => {
     // A marked paragraph needs a blank line around it, but never two in a row.
     if (out.length > 0 && out[out.length - 1].trim() !== '') out.push('')
-    out.push(markRun(entry.text, mode, 'del'))
+    out.push(isTableLine(entry.text) ? markTableRow(entry.text, mode, 'del') : markRun(entry.text, mode, 'del'))
   }
   const insertDeletions = (target, safeAbove, blankTarget) => {
     // An anchor that was passed without a safe boundary stays dropped: the plan
@@ -334,10 +408,17 @@ function injectMarks(text, data, mode) {
       out.push(line)
       continue
     }
+    // A delimiter row is structural: any mark inside it kills the whole table.
+    if (isTableLine(line) && isDelimiterRow(line)) {
+      out.push(line)
+      continue
+    }
     if (entry.kind === 'added') {
-      out.push(isBlockLine(line) ? line : markRun(line, mode, 'add'))
+      out.push(isTableLine(line) ? markTableRow(line, mode, 'add') : (isBlockLine(line) ? line : markRun(line, mode, 'add')))
     } else if (entry.kind === 'modified') {
-      out.push(mergeOldNewOf(entry.oldText ?? '', entry.newText ?? '', mode))
+      // Table rows are merged per `|` segment — the separator never ends up
+      // inside a mark, so column add/remove and cell edits keep the table valid.
+      out.push(isTableLine(line) ? mergeTableRow(entry.oldText ?? '', line, mode) : mergeOldNewOf(entry.oldText ?? '', entry.newText ?? '', mode))
     } else {
       out.push(line)
     }
@@ -348,7 +429,7 @@ function injectMarks(text, data, mode) {
     let first = true
     for (const entry of trailer) {
       if (!first && out.length > 0 && out[out.length - 1].trim() !== '') out.push('')
-      out.push(markRun(entry.text, mode, 'del'))
+      out.push(isTableLine(entry.text) ? markTableRow(entry.text, mode, 'del') : markRun(entry.text, mode, 'del'))
       first = false
     }
   }

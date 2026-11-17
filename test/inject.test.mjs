@@ -2,6 +2,7 @@
 import { assert, test } from './harness.mjs'
 import {
   mergeOldNew, injectMarkdown, injectMarkdownHtml, isBlockLine, isFenceLine, parseFileAddress, gitMarkFileAddress, markdownImageUrl,
+  isTableLine, isDelimiterRow, markTableRow, mergeTableRow,
 } from '../src/client/inject.mjs'
 
 /**
@@ -152,6 +153,105 @@ test('injectMarkdown marks every non-structural line of an untracked file', () =
   const text = 'alpha\n\n# heading\nbeta\n'
   const marked = injectMarkdown(text, { kind: 'text', version: 'v1', lines: [], deletions: [], untracked: true })
   assert.equal(marked, '*alpha*\n\n# heading\n*beta*\n')
+})
+
+test('isTableLine recognises lines that start with a pipe', () => {
+  assert.equal(isTableLine('| a | b |'), true)
+  assert.equal(isTableLine('|a|'), true)
+  assert.equal(isTableLine(' a | b'), false)
+  assert.equal(isTableLine('text'), false)
+  assert.equal(isTableLine(''), false)
+})
+
+test('isDelimiterRow recognises GFM delimiter rows only', () => {
+  for (const line of ['| --- | --- |', '|:---|:---:|', '|---|', '| - | :--: |', '| --- ']) {
+    assert.equal(isDelimiterRow(line), true, line)
+  }
+  for (const line of ['| a | b |', '| --- | --- | c |', '| 1 | - |']) {
+    assert.equal(isDelimiterRow(line), false, line)
+  }
+})
+
+test('markTableRow wraps each added segment, keeping pipes literal', () => {
+  assert.equal(markTableRow('| A | B |', 'md', 'add'), '|*A*|*B*|')
+  assert.equal(markTableRow('| A |  | B |', 'md', 'add'), '|*A*||*B*|')
+  assert.equal(markTableRow('| x | y', 'md', 'add'), '|*x*|*y*')
+})
+
+test('markTableRow wraps each deleted segment, keeping pipes literal', () => {
+  assert.equal(markTableRow('| A | B |', 'md', 'del'), '|~~A~~|~~B~~|')
+})
+
+test('injectMarkdown marks an added table row per segment', () => {
+  const text = 'alpha\n| A | B |\n'
+  const marked = injectMarkdown(text, payload([{ line: 2, kind: 'added', newText: '| A | B |' }]))
+  assert.equal(marked, 'alpha\n|*A*|*B*|\n')
+})
+
+test('mergeTableRow marks a modified table row per segment with no pipe inside a mark', () => {
+  assert.equal(mergeTableRow('| A | B |', '| C | D |', 'md'), '|~~A~~*C*|~~B~~*D*|')
+  assert.equal(mergeTableRow('| A | B |', '| A | B |', 'md'), '| A | B |')
+})
+
+test('mergeTableRow leaves equal segments literal and marks only new cells', () => {
+  // A column appended: the existing cells are unchanged, only the new cell is added.
+  assert.equal(mergeTableRow('| name | qty |', '| name | qty | note |', 'md'), '| name | qty |*note*|')
+})
+
+test('mergeTableRow drops a removed cell instead of emitting a phantom column', () => {
+  assert.equal(mergeTableRow('| name | qty | note |', '| name | qty |', 'md'), '| name | qty |')
+})
+
+test('mergeTableRow swaps two cells as per-segment del+add', () => {
+  assert.equal(mergeTableRow('| apple | 3 |', '| 3 | apple |', 'md'), '|~~apple~~*3*|~~3~~*apple*|')
+})
+
+test('adding a column keeps the delimiter row verbatim and marks header/body per segment', () => {
+  const text = '| name | qty | note |\n| --- | --- | --- |\n| apple | 3 | fresh |\n'
+  const marked = injectMarkdown(text, payload([
+    { line: 1, kind: 'modified', oldText: '| name | qty |', newText: '| name | qty | note |' },
+    { line: 2, kind: 'modified', oldText: '| --- | --- |', newText: '| --- | --- | --- |' },
+    { line: 3, kind: 'modified', oldText: '| apple | 3 |', newText: '| apple | 3 | fresh |' },
+  ]))
+  assert.equal(marked, '| name | qty |*note*|\n| --- | --- | --- |\n| apple | 3 |*fresh*|\n')
+})
+
+test('removing a column leaves the table intact and marks nothing inside it', () => {
+  const text = '| name | qty |\n| --- | --- |\n| apple | 3 |\n'
+  const marked = injectMarkdown(text, payload([
+    { line: 1, kind: 'modified', oldText: '| name | qty | note |', newText: '| name | qty |' },
+    { line: 2, kind: 'modified', oldText: '| --- | --- | --- |', newText: '| --- | --- |' },
+    { line: 3, kind: 'modified', oldText: '| apple | 3 | fresh |', newText: '| apple | 3 |' },
+  ]))
+  assert.equal(marked, '| name | qty |\n| --- | --- |\n| apple | 3 |\n')
+})
+
+test('delimiter alignment changes are never marked but the table stays whole', () => {
+  const text = '| name | qty |\n| :--- | ---: |\n| apple | 3 |\n'
+  const marked = injectMarkdown(text, payload([
+    { line: 2, kind: 'modified', oldText: '| --- | --- |', newText: '| :--- | ---: |' },
+  ]))
+  assert.equal(marked, '| name | qty |\n| :--- | ---: |\n| apple | 3 |\n')
+})
+
+test('injectMarkdownHtml marks a modified table row per segment with entities', () => {
+  const marked = injectMarkdownHtml('| name | qty | note |\n| --- | --- | --- |\n', payload([
+    { line: 1, kind: 'modified', oldText: '| name | qty |', newText: '| name | qty | note |' },
+    { line: 2, kind: 'modified', oldText: '| --- | --- |', newText: '| --- | --- | --- |' },
+  ]))
+  assert.equal(marked, '| name | qty |&#60;span data-gm="add"&#62;note&#60;/span&#62;|\n| --- | --- | --- |\n')
+})
+
+test('a deleted table row is replayed with per-segment del marks', () => {
+  const text = 'intro\n\nbeta\n'
+  const marked = injectMarkdown(text, payload([], [{ line: 3, text: '| removed | row |' }]))
+  assert.equal(marked, 'intro\n\n|~~removed~~|~~row~~|\n\nbeta\n')
+})
+
+test('an untracked table is marked per segment with the delimiter kept bare', () => {
+  const text = '| a | b |\n| --- | --- |\n| 1 | 2 |\n'
+  const marked = injectMarkdown(text, { kind: 'text', version: 'v1', lines: [], deletions: [], untracked: true })
+  assert.equal(marked, '|*a*|*b*|\n| --- | --- |\n|*1*|*2*|\n')
 })
 
 test('injectMarkdown keeps a fenced block verbatim in an untracked file', () => {
