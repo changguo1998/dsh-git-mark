@@ -1,0 +1,17 @@
+<svg width="36" height="36" viewBox="0 0 36 36" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- gitmark wordmark: "git" in red with a red strikethrough, "mark" in green.
+       G is a numerically generated ring (center 13,13, r 3.9) missing only the
+       top-right quarter, plus a full-width middle bar. -->
+  <g stroke="#FF5A6A" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16.90 13.00 L16.89 13.31 L16.85 13.61 L16.79 13.91 L16.71 14.21 L16.60 14.49 L16.47 14.77 L16.33 15.04 L16.16 15.29 L15.97 15.53 L15.76 15.76 L15.53 15.97 L15.29 16.16 L15.04 16.33 L14.77 16.47 L14.49 16.60 L14.21 16.71 L13.91 16.79 L13.61 16.85 L13.31 16.89 L13.00 16.90 L12.69 16.89 L12.39 16.85 L12.09 16.79 L11.79 16.71 L11.51 16.60 L11.23 16.47 L10.96 16.33 L10.71 16.16 L10.47 15.97 L10.24 15.76 L10.03 15.53 L9.84 15.29 L9.67 15.04 L9.53 14.77 L9.40 14.49 L9.29 14.21 L9.21 13.91 L9.15 13.61 L9.11 13.31 L9.10 13.00 L9.11 12.69 L9.15 12.39 L9.21 12.09 L9.29 11.79 L9.40 11.51 L9.53 11.23 L9.67 10.96 L9.84 10.71 L10.03 10.47 L10.24 10.24 L10.47 10.03 L10.71 9.84 L10.96 9.67 L11.23 9.53 L11.51 9.40 L11.79 9.29 L12.09 9.21 L12.39 9.15 L12.69 9.11 L13.00 9.10 M16.9 12.8 V16.9 M16.9 13 L9.8 13" />
+    <path d="M19 9 V17" />
+    <path d="M21.8 9 H26.9 M24.35 9 V17" />
+  </g>
+  <rect x="9.6" y="12.8" width="17.6" height="1.4" rx="0.7" fill="#FF5A6A" opacity="0.95" />
+  <g stroke="#2EE06B" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M7.5 27 V19 L10.3 23.4 L12.8 19 V27" />
+    <path d="M14.3 27 L16 19 L17.7 27 M15 24 H17.15" />
+    <path d="M19.7 27 V19 M19.7 19 H22.7 M22.7 19 A1.7 1.7 0 0 1 22.7 22.4 M19.7 22.4 H22.7 M22.9 22.6 L25.2 27" />
+    <path d="M26 27 V19 M26 22.8 L29.6 19.4 M26 22.8 L29.6 26.6" />
+  </g>
+</svg>

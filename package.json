@@ -1,0 +1,55 @@
+{
+  "name": "dsh-git-mark",
+  "version": "0.1.0",
+  "description": "在 Markdown 文档预览中标注相对上次提交(HEAD)的改动：删除=红色删除线，新增=绿色，整行删除=红色删除线重现。",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./lib/client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "lib/index.js",
+    "lib/client.js",
+    "cordis.patch.yml",
+    "icon.svg",
+    "locale",
+    "src/diff-parse.mjs",
+    "src/client/inject-core.js",
+    "src/client/bind-body.js",
+    "src/client/inject.mjs",
+    "tools/build-client.mjs",
+    "test",
+    "README.md"
+  ],
+  "scripts": {
+    "build:client": "node tools/build-client.mjs",
+    "test": "node test/run.mjs"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-primitives",
+        "@deepseek-ai/dsh-client-ui-sidebar-documentpreview"
+      ]
+    }
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "cordis-plugin",
+    "markdown",
+    "git"
+  ],
+  "license": "MIT"
+}

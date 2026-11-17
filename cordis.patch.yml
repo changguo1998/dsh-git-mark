@@ -1,0 +1,4 @@
+# dsh-git-mark: 只插入本插件独有的行，不覆盖任何宿主共享条目。
+- insert:
+    - id: git-mark
+      name: 'dsh-git-mark'

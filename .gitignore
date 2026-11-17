@@ -1,0 +1,10 @@
+# Dependencies / build outputs that never belong in version control
+node_modules/
+*.tgz
+*.log
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

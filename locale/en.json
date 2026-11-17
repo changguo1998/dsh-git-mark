@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git marks",
+    "description": "Annotate Markdown previews with the changes of the working tree relative to the last commit (HEAD): deletions show as red strikethrough, additions as green text, whole deleted lines reappear struck out in red, and untracked files are marked line-by-line green. The marks live in a generated copy that is never committed back — source files are never rewritten. Pair it with the \"Git-marked copy\" button in dsh-better-sidebar; the full Markdown grammar (tables, code highlighting, KaTeX, mermaid) is preserved."
+  }
+}

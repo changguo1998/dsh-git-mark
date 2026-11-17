@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Git 标注",
+    "description": "在 Markdown 预览中标注相对上次提交（HEAD）的改动：删除=红色删除线，新增=绿色，整行删除以红色删除线重现，未跟踪文件整份按行标绿。标注只生成在副本里，绝不改写原文件；配合 dsh-better-sidebar 的「Git 标注副本」按钮使用，完整 Markdown 语法（表格、代码高亮、KaTeX、mermaid）全部保留。"
+  }
+}
