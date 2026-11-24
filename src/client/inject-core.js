@@ -80,6 +80,59 @@ function markdownImageUrl(base, documentPath, destination) {
   return new URL(`api/file?path=${encodeURIComponent(path)}`, base).href
 }
 
+/**
+ * Pick the open marked-copy tabs the auto-refresh poller may check.
+ *
+ * Two sources are combined, because neither one is enough on its own:
+ * - the paths come from better-sidebar's native path tabs (`nativePathTabs()`),
+ *   which carry the real file path of every editor tab;
+ * - the MEMBERSHIP comes from the Host's authoritative inventory: a row only
+ *   counts while the Host still lists that tab id. That is what stops a plugin's
+ *   leftover record (a tab the reader closed) from being reopened.
+ *
+ * Only the mounted Session's layout qualifies: it is the only column this client
+ * can rewrite without racing a background one, and the only one readers see.
+ * @param nativeTabs - better-sidebar path rows (`{ id, path, sessionId, scopeSessionId }`).
+ * @param openTabs - Host inventory rows (`{ sessionId, tabId }`).
+ * @param mountedSessionId - the Session on screen.
+ * @param limit - maximum candidates per tick.
+ * @returns `{ id, path, sessionId, seatSessionId }` rows: `sessionId` is the
+ * file's own Session (for the watch route), `seatSessionId` the layout holding
+ * the tab (for closing it).
+ */
+function gitMarkCopyCandidates(nativeTabs, openTabs, mountedSessionId, limit) {
+  const cap = typeof limit === 'number' && limit > 0 ? limit : Number.POSITIVE_INFINITY
+  // tab id -> the Session whose layout still holds it.
+  const live = new Map()
+  for (const row of Array.isArray(openTabs) ? openTabs : []) {
+    if (row === null || typeof row !== 'object') continue
+    const seat = typeof row.sessionId === 'string' && row.sessionId !== '' ? row.sessionId : undefined
+    const id = typeof row.tabId === 'string' ? row.tabId : row.id
+    if (seat === undefined || typeof id !== 'string' || id === '') continue
+    if (typeof mountedSessionId === 'string' && mountedSessionId !== '' && seat !== mountedSessionId) continue
+    live.set(id, seat)
+  }
+  const out = []
+  const seen = new Set()
+  for (const tab of Array.isArray(nativeTabs) ? nativeTabs : []) {
+    if (tab === null || typeof tab !== 'object') continue
+    const id = tab.id
+    const path = tab.path
+    if (typeof id !== 'string' || id === '' || typeof path !== 'string' || seen.has(id)) continue
+    if (!isMarkedCopyPath(path)) continue
+    // A tab the Host no longer lists is a leftover record: reopening it would
+    // resurrect a tab the reader closed.
+    const seat = live.get(id)
+    if (seat === undefined) continue
+    const sessionId = typeof tab.scopeSessionId === 'string' && tab.scopeSessionId !== '' ? tab.scopeSessionId : tab.sessionId
+    if (typeof sessionId !== 'string' || sessionId === '') continue
+    seen.add(id)
+    out.push({ id, path, sessionId, seatSessionId: seat })
+    if (out.length >= cap) break
+  }
+  return out
+}
+
 /** Whether a line opens or closes a fenced code block. */
 function isFenceLine(line) {
   return /^\s*(`{3,}|~{3,})/.test(line)

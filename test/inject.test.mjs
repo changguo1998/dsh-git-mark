@@ -2,7 +2,7 @@
 import { assert, test } from './harness.mjs'
 import {
   mergeOldNew, injectMarkdown, injectMarkdownHtml, isBlockLine, isFenceLine, parseFileAddress, gitMarkFileAddress, markdownImageUrl,
-  isTableLine, isDelimiterRow, markTableRow, mergeTableRow, isMarkedCopyPath,
+  isTableLine, isDelimiterRow, markTableRow, mergeTableRow, isMarkedCopyPath, gitMarkCopyCandidates,
 } from '../src/client/inject.mjs'
 
 /**
@@ -14,6 +14,34 @@ import {
 function payload(lines = [], deletions = []) {
   return { kind: 'text', version: 'v1', lines, deletions, untracked: false }
 }
+
+test('gitMarkCopyCandidates needs both a copy path and live Host membership', () => {
+  const nativeTabs = [
+    // Live copy: path + Host row agree.
+    { id: 'tab1', path: '/w/.dsh/git-mark/docs/note.md', sessionId: 'seat', scopeSessionId: 's1' },
+    // Leftover better-sidebar record: the Host no longer lists this id.
+    { id: 'ghost', path: '/w/.dsh/git-mark/README.md', sessionId: 'seat', scopeSessionId: 's1' },
+    // A real tab, but not a copy.
+    { id: 'tab2', path: '/w/docs/note.md', sessionId: 'seat', scopeSessionId: 's1' },
+    // Live row, but another Session's layout.
+    { id: 'tab3', path: '/w/.dsh/git-mark/other.md', sessionId: 'seat', scopeSessionId: 's1' },
+    { id: 'tab1', path: '/w/.dsh/git-mark/docs/note.md', sessionId: 'seat', scopeSessionId: 's1' },
+    null,
+  ]
+  const openTabs = [
+    { sessionId: 's1', tabId: 'tab1' },
+    { sessionId: 's1', tabId: 'tab2' },
+    { sessionId: 's2', tabId: 'tab3' },
+    { sessionId: 's1', tabId: '' },
+    null,
+  ]
+  assert.deepEqual(gitMarkCopyCandidates(nativeTabs, openTabs, 's1', 8), [
+    { id: 'tab1', path: '/w/.dsh/git-mark/docs/note.md', sessionId: 's1', seatSessionId: 's1' },
+  ])
+  // Nothing live yields nothing, and the cap bounds the fan-out.
+  assert.deepEqual(gitMarkCopyCandidates(nativeTabs, [], 's1', 8), [])
+  assert.equal(gitMarkCopyCandidates(nativeTabs, openTabs, 's1', 1).length, 1)
+})
 
 test('mergeOldNew marks a replaced run red then green', () => {
   assert.equal(mergeOldNew('keep this old', 'keep this new'), 'keep this ~~old~~*new*')

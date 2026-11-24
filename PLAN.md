@@ -1,6 +1,9 @@
 # dsh-git-mark 插件实现方案（完整文档）
 
 > 目标读者：在「创造模式」会话中接手本任务的 Agent。本文档自包含，无需依赖原始对话上下文。
+>
+> **现状说明**：下文是 v0.1 的设计草稿。实际实现后来改为「标注副本写入 `.dsh/git-mark/` 的镜像目录 +
+> 副本就地刷新 + 自动刷新」，并以 README 为准；本文档只保留最初的调研结论与限制清单。
 
 ## 0. 一句话目标
 在 DSH 的 **Markdown 文档预览**中，标注当前工作区文件**相对上次提交（HEAD）**的改动，全部实现在一个新插件包内，不改任何现有代码。
@@ -46,7 +49,7 @@
 ## 4. 已建文件（骨架，位于工作区）
 ```
 <workspace>/plugins/dsh-git-mark/
-├─ package.json    包名 dsh-git-mark v0.2.0；main:lib/index.js；dsh.bundle.patch；dsh.client.inject
+├─ package.json    包名 dsh-git-mark v0.4.0；main:lib/index.js；dsh.bundle.patch；dsh.client.inject
 ├─ cordis.patch.yml 只 insert 一行 id:git-mark name:dsh-git-mark
 ├─ README.md       安装/效果/局限简介
 ├─ PLAN.md         本文档

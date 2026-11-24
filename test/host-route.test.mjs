@@ -51,14 +51,27 @@ function fakeSubprocess() {
 /**
  * Mount the plugin against a fake host context and return the route handlers.
  * @param options - session directory and the live session ids.
- * @returns `{ get, post }` route handlers keyed by method.
+ * @returns `{ facts, render, watch }` route handlers.
  */
 function mount(options) {
   /** @type {Record<string, Function>} */
   const routes = {}
   const scope = {
     get(name) {
-      if (name === 'connection') return { fetch: { register: (route) => { routes[route.methods[0]] = route.fetch; return () => {} } } }
+      if (name === 'connection') {
+        return {
+          fetch: {
+            register: (route) => {
+              // GET is registered twice (facts and watch): key it by path tail.
+              const key = route.path.endsWith('/watch')
+                ? 'watch'
+                : route.path.endsWith('/render') ? 'render' : 'facts'
+              routes[key] = route.fetch
+              return () => {}
+            },
+          },
+        }
+      }
       if (name === 'subprocess') return fakeSubprocess()
       if (name === 'sessions') {
         return {
@@ -81,9 +94,10 @@ function mount(options) {
     },
     logger: scope.logger,
   })
-  assert.equal(typeof routes.GET, 'function', 'the facts route must be mounted')
-  assert.equal(typeof routes.POST, 'function', 'the render route must be mounted')
-  return { facts: routes.GET, render: routes.POST }
+  assert.equal(typeof routes.facts, 'function', 'the facts route must be mounted')
+  assert.equal(typeof routes.render, 'function', 'the render route must be mounted')
+  assert.equal(typeof routes.watch, 'function', 'the watch route must be mounted')
+  return { facts: routes.facts, render: routes.render, watch: routes.watch }
 }
 
 /**
@@ -110,6 +124,19 @@ async function post(handler, payload) {
     body: JSON.stringify(payload),
   }))
   return { status: response.status, body: await response.json(), cacheControl: response.headers.get('cache-control') }
+}
+
+/**
+ * Ask the mounted watch route about one marked copy.
+ * @param handler - registered GET fetch callback for the watch route.
+ * @param sessionId - the session whose workspace owns the copy.
+ * @param path - the copy path (workspace-relative or absolute).
+ * @returns the parsed JSON body and status.
+ */
+async function watchCopy(handler, sessionId, path) {
+  const query = `sessionId=${encodeURIComponent(sessionId)}&path=${encodeURIComponent(path)}`
+  const response = await handler(new Request(`http://127.0.0.1:1/api/dsh-git-mark/watch?${query}`))
+  return { status: response.status, body: await response.json() }
 }
 
 /**
@@ -337,6 +364,40 @@ test('the render route accepts an absolute path inside the workspace', async () 
   const { render } = mount({ cwd: root, sessions: ['session-1'] })
   const answer = await post(render, { sessionId: 'session-1', path: join(root, 'docs/note.md') })
   assert.equal(answer.body.kind, 'created')
+})
+
+test('the watch route reports unchanged first, then a change after the source is edited', async () => {
+  const root = await makeRepo()
+  const { render, watch } = mount({ cwd: root, sessions: ['session-1'] })
+  const created = await post(render, { sessionId: 'session-1', path: 'docs/note.md' })
+  assert.equal(created.body.kind, 'created')
+
+  // One `stat` after a fresh render: the baseline matches, nothing to do.
+  const quiet = await watchCopy(watch, 'session-1', '.dsh/git-mark/docs/note.md')
+  assert.equal(quiet.body.kind, 'checked')
+  assert.equal(quiet.body.changed, false)
+
+  // Editing the source must be noticed, and the copy must be rewritten.
+  await writeFile(join(root, 'docs/note.md'), '# Note\n\nalpha keep changed again\n\nomega keep\n', 'utf8')
+  const loud = await watchCopy(watch, 'session-1', '.dsh/git-mark/docs/note.md')
+  assert.equal(loud.body.kind, 'checked')
+  assert.equal(loud.body.changed, true)
+  assert.ok((await readFile(created.body.path, 'utf8')).includes('changed again'))
+
+  // The new baseline holds, so the next tick is quiet again.
+  const settled = await watchCopy(watch, 'session-1', '.dsh/git-mark/docs/note.md')
+  assert.equal(settled.body.changed, false)
+})
+
+test('the watch route refuses a non-copy path and reports a missing source', async () => {
+  const root = await makeRepo()
+  const { watch } = mount({ cwd: root, sessions: ['session-1'] })
+  const notCopy = await watchCopy(watch, 'session-1', 'docs/note.md')
+  assert.equal(notCopy.status, 400)
+  assert.equal(notCopy.body.kind, 'bad-path')
+
+  const missing = await watchCopy(watch, 'session-1', '.dsh/git-mark/docs/gone.md')
+  assert.equal(missing.body.kind, 'no-source')
 })
 
 /** Remove every temporary directory this suite created. */

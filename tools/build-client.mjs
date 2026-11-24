@@ -24,6 +24,7 @@ const CORE_EXPORTS = [
   'gitMarkFileAddress',
   'markdownImageUrl',
   'isMarkedCopyPath',
+  'gitMarkCopyCandidates',
   'isFenceLine',
   'toggleFence',
   'isBlockLine',

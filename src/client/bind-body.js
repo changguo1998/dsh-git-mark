@@ -58,6 +58,282 @@ function RenderMarkIcon(props) {
 // below `.dsh/git-mark/`) — `isMarkedCopyPath` comes from the embedded core
 // (src/client/inject-core.js).
 
+/** How often the auto-refresh poller asks about open copies. */
+var GIT_MARK_POLL_MS = 2000
+
+/** Largest number of copy tabs one poll tick will check. */
+var GIT_MARK_POLL_LIMIT = 8
+
+/**
+ * Copies whose file changed while their tab was NOT the one on screen, keyed by
+ * copy path. A copy is reloaded only when it is active, so a background refresh
+ * can never take the reader's view; the flag survives until that happens.
+ */
+var gitMarkStaleCopies = {}
+
+/** A copy file's own name (mirror layout keeps the source's basename). */
+function copyTabTitle(tabPath, suffix) {
+  return String(tabPath).split(/[\\/]/).pop() + suffix
+}
+
+/**
+ * Read one Host observable (`getSnapshot` on current hosts, `get` on older ones).
+ * @param observable - the observable, or the plain value already read.
+ * @returns its current value, or undefined.
+ */
+function gitMarkSnapshot(observable) {
+  if (observable === undefined || observable === null) return undefined
+  try {
+    if (typeof observable.getSnapshot === 'function') return observable.getSnapshot()
+    if (typeof observable.get === 'function') return observable.get()
+    return observable
+  } catch (error) {
+    return undefined
+  }
+}
+
+/** The Host's right-Sidebar controller, or undefined when it publishes none. */
+function gitMarkSidebarRight(ctx) {
+  try {
+    return ctx.get('sidebarRight')
+  } catch (error) {
+    return undefined
+  }
+}
+
+/** The Session currently on screen (the only layout this client may rewrite). */
+function gitMarkMountedSession(sidebarRight) {
+  var value = gitMarkSnapshot(sidebarRight.mounted)
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** Every open tab row the Host keeps (authoritative, unlike a plugin's records). */
+function gitMarkOpenTabRows(sidebarRight) {
+  var inventory = sidebarRight.openTabs
+  var value = gitMarkSnapshot(inventory === undefined || inventory === null ? undefined : inventory.source)
+  return Array.isArray(value) ? value : []
+}
+
+/**
+ * The committed tab ids of one Session, from the controller's own accessor. This
+ * is the membership source that reliably answers "is this tab still open"; the
+ * published inventory snapshot can be empty on a Host that never adopted it.
+ * @param sidebarRight - the right-Sidebar controller.
+ * @param sessionId - the Session whose layout to read.
+ * @returns inventory-shaped rows (`{ sessionId, tabId }`), or [] when unavailable.
+ */
+function gitMarkSessionTabRows(sidebarRight, sessionId) {
+  var rows = []
+  if (typeof sidebarRight.tabsIn === 'function') {
+    try {
+      var committed = sidebarRight.tabsIn(sessionId)
+      if (Array.isArray(committed)) rows = committed
+    } catch (error) {
+      rows = []
+    }
+  }
+  if (rows.length === 0) return gitMarkOpenTabRows(sidebarRight)
+  var out = []
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    if (row === null || typeof row !== 'object') continue
+    var id = typeof row.id === 'string' ? row.id : row.tabId
+    if (typeof id !== 'string' || id === '') continue
+    out.push({ sessionId: sessionId, tabId: id })
+  }
+  return out
+}
+
+/** The editor tabs better-sidebar reports (they carry the file paths). */
+function gitMarkNativePathTabs(ctx) {
+  var betterSidebar
+  try {
+    betterSidebar = ctx.get('betterSidebar')
+  } catch (error) {
+    return []
+  }
+  if (betterSidebar === undefined || betterSidebar === null || typeof betterSidebar.nativePathTabs !== 'function') return []
+  try {
+    var rows = betterSidebar.nativePathTabs()
+    return Array.isArray(rows) ? rows : []
+  } catch (error) {
+    return []
+  }
+}
+
+/** The tab the reader is looking at, when the Host can say. */
+function gitMarkActiveTabId(sidebarRight) {
+  if (typeof sidebarRight.active !== 'function') return undefined
+  try {
+    var active = sidebarRight.active()
+    if (active === null || active === undefined) return undefined
+    if (typeof active.id === 'string') return active.id
+    if (typeof active.tabId === 'string') return active.tabId
+  } catch (error) {
+    /* an unreadable active tab only means "reload nothing this tick" */
+  }
+  return undefined
+}
+
+/**
+ * Whether one tab id is still open, re-read from the Host inventory. This is the
+ * guard that keeps a reload from resurrecting a tab the reader just closed.
+ * @param sidebarRight - the right-Sidebar controller.
+ * @param tabId - the tab to look for.
+ * @returns true while the Host still lists it.
+ */
+function gitMarkTabStillOpen(sidebarRight, tabId, sessionId) {
+  var rows = gitMarkSessionTabRows(sidebarRight, sessionId)
+  for (var i = 0; i < rows.length; i++) {
+    var row = rows[i]
+    if (row === null || typeof row !== 'object') continue
+    if (row.tabId === tabId || row.id === tabId) return true
+  }
+  return false
+}
+
+/**
+ * Close one copy tab and reopen it on the next tick, so better-sidebar loads the
+ * regenerated file (it exposes no reload for an open tab). Only called for the
+ * active tab, so the reopen may take the view back.
+ * @param betterSidebar - the sidebar service.
+ * @param tab - `{ id, path, seatSessionId }` of the tab to reload.
+ * @param titleSuffix - localized tab-title suffix.
+ */
+function reloadCopyTab(betterSidebar, tab, titleSuffix) {
+  if (typeof betterSidebar.closeTab !== 'function' || typeof betterSidebar.openTab !== 'function') return
+  betterSidebar.closeTab(tab.id, { sessionId: tab.seatSessionId })
+  setTimeout(function () {
+    betterSidebar.openTab({
+      type: 'editor',
+      path: tab.path,
+      title: copyTabTitle(tab.path, titleSuffix),
+      reveal: true,
+    })
+  }, 0)
+}
+
+/**
+ * Check one open copy: mark it stale when its file changed, and reload it right
+ * away when it is also the tab on screen.
+ * @param ctx - client plugin context.
+ * @param tab - `{ id, path, address, sessionId, seatSessionId }` to check.
+ * @param copy - plugin locale resolver.
+ */
+function checkOneCopy(ctx, tab, copy) {
+  var query = new URLSearchParams({ sessionId: tab.sessionId, path: tab.path })
+  fetch('/api/dsh-git-mark/watch?' + query.toString())
+    .then(function (response) { return response.json() })
+    .then(function (payload) {
+      if (payload !== null && payload !== undefined && payload.changed === true) {
+        gitMarkStaleCopies[tab.path] = true
+      } else {
+        delete gitMarkStaleCopies[tab.path]
+      }
+      if (gitMarkStaleCopies[tab.path] !== true) return
+      var sidebarRight = gitMarkSidebarRight(ctx)
+      if (sidebarRight === undefined || sidebarRight === null) return
+      // Only the visible copy is reloaded: a reopen takes focus by design.
+      if (gitMarkActiveTabId(sidebarRight) !== tab.id) return
+      // Re-read the inventory right before acting: a tab the reader closed in
+      // the meantime must stay closed instead of being reopened by the reload.
+      if (!gitMarkTabStillOpen(sidebarRight, tab.id, tab.seatSessionId)) return
+      var betterSidebar
+      try {
+        betterSidebar = ctx.get('betterSidebar')
+      } catch (error) {
+        betterSidebar = undefined
+      }
+      if (betterSidebar === undefined || betterSidebar === null) return
+      delete gitMarkStaleCopies[tab.path]
+      reloadCopyTab(betterSidebar, tab, copy('render.tabTitle'))
+    })
+    .catch(function () {
+      // A failed poll is silent: the manual button and the next tick retry.
+    })
+}
+
+/**
+ * Run one poll pass: read the Host's tab inventory, check every open copy, and
+ * drop stale flags of copies that closed.
+ * @param ctx - client plugin context.
+ * @param copy - plugin locale resolver.
+ * @returns what the pass saw (also the shape the diagnostics entry returns).
+ */
+function runPollTick(ctx, copy) {
+  var sidebarRight = gitMarkSidebarRight(ctx)
+  if (sidebarRight === undefined || sidebarRight === null) return { skipped: 'no-sidebar-right' }
+  var sessionId = gitMarkMountedSession(sidebarRight)
+  if (sessionId === undefined) return { skipped: 'no-mounted-session' }
+  var nativeTabs = gitMarkNativePathTabs(ctx)
+  var openTabs = gitMarkSessionTabRows(sidebarRight, sessionId)
+  var candidates = gitMarkCopyCandidates(nativeTabs, openTabs, sessionId, GIT_MARK_POLL_LIMIT)
+  var live = {}
+  for (var i = 0; i < candidates.length; i++) {
+    live[candidates[i].path] = true
+    checkOneCopy(ctx, candidates[i], copy)
+  }
+  // Stale flags of copies that are no longer open must not accumulate.
+  for (var path in gitMarkStaleCopies) {
+    if (live[path] !== true) delete gitMarkStaleCopies[path]
+  }
+  return {
+    mounted: sessionId,
+    active: gitMarkActiveTabId(sidebarRight),
+    nativeTabs: nativeTabs,
+    openTabs: openTabs,
+    inventoryRows: gitMarkOpenTabRows(sidebarRight),
+    tabsInAvailable: typeof sidebarRight.tabsIn === 'function',
+    candidates: candidates,
+    stale: Object.keys(gitMarkStaleCopies),
+    visibility: typeof document === 'undefined' ? 'n/a' : document.visibilityState,
+  }
+}
+
+/**
+ * The auto-refresh poller: once per interval, ask the Host whether the source of
+ * each open copy changed, and reload the copy the reader is looking at.
+ * @param ctx - client plugin context.
+ * @param copy - plugin locale resolver.
+ * @returns the disposer that stops the timer.
+ */
+function startAutoRefresh(ctx, copy) {
+  if (typeof setInterval !== 'function') return undefined
+  var timer = setInterval(function () {
+    // A hidden page runs no poll at all: the reader cannot see a refresh.
+    if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return
+    runPollTick(ctx, copy)
+  }, GIT_MARK_POLL_MS)
+  return function () { clearInterval(timer) }
+}
+
+/**
+ * A read-only diagnostics entry (`window.__dshGitMark`): what the poller sees,
+ * and a manual tick that runs the same pass synchronously. Nothing here writes
+ * files or tabs — `tick()` only re-runs the checks the interval would run.
+ * @param ctx - client plugin context.
+ * @param copy - plugin locale resolver.
+ * @returns the disposer that removes the entry.
+ */
+function installDiagnostics(ctx, copy) {
+  if (typeof window === 'undefined') return undefined
+  window.__dshGitMark = {
+    tick: function () { return runPollTick(ctx, copy) },
+    stale: function () { return Object.keys(gitMarkStaleCopies) },
+    watch: function (sessionId, path) {
+      var query = new URLSearchParams({ sessionId: sessionId, path: path })
+      return fetch('/api/dsh-git-mark/watch?' + query.toString()).then(function (response) { return response.json() })
+    },
+  }
+  return function () {
+    try {
+      delete window.__dshGitMark
+    } catch (error) {
+      /* a frozen window object is not worth failing the teardown for */
+    }
+  }
+}
+
 /**
  * The Keyed document body: the builtin Markdown rendering, with change marks
  * relative to HEAD inserted into an in-memory copy of the file text.
@@ -209,10 +485,7 @@ function runRenderMarked(ctx, context, copy) {
           if (typeof fail === 'function') fail(copy('render.refreshFallback'))
           return
         }
-        betterSidebar.closeTab(context.tabId, { sessionId: sessionId })
-        setTimeout(function () {
-          betterSidebar.openTab({ type: 'editor', path: path, title: title, reveal: true })
-        }, 0)
+        reloadCopyTab(betterSidebar, { id: context.tabId, path: path, seatSessionId: sessionId }, copy('render.tabTitle'))
         return
       }
       betterSidebar.openTab({ type: 'editor', path: payload.path, title: title })
@@ -285,6 +558,17 @@ function applyGitMark(ctx) {
     document.head.appendChild(element)
     return function () { element.remove() }
   }, 'dsh-git-mark: change-mark styles')
+
+  // Auto-refresh: while the page is visible, ask the Host whether the source of
+  // every OPEN marked copy changed, and reload the copy the reader is watching.
+  ctx.effect(function () {
+    return startAutoRefresh(ctx, copy)
+  }, 'dsh-git-mark: auto refresh')
+
+  // Read-only diagnostics for a misbehaving poll (see installDiagnostics).
+  ctx.effect(function () {
+    return installDiagnostics(ctx, copy)
+  }, 'dsh-git-mark: diagnostics')
 
   // Bridge to better-sidebar: a header button on its editor that writes a
   // git-marked copy of the open file and opens it. Default .md behaviour is
