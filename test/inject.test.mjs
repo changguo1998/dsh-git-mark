@@ -2,7 +2,7 @@
 import { assert, test } from './harness.mjs'
 import {
   mergeOldNew, injectMarkdown, injectMarkdownHtml, isBlockLine, isFenceLine, parseFileAddress, gitMarkFileAddress, markdownImageUrl,
-  isTableLine, isDelimiterRow, markTableRow, mergeTableRow,
+  isTableLine, isDelimiterRow, markTableRow, mergeTableRow, isMarkedCopyPath,
 } from '../src/client/inject.mjs'
 
 /**
@@ -17,6 +17,17 @@ function payload(lines = [], deletions = []) {
 
 test('mergeOldNew marks a replaced run red then green', () => {
   assert.equal(mergeOldNew('keep this old', 'keep this new'), 'keep this ~~old~~*new*')
+})
+
+test('isMarkedCopyPath recognises the mirror tree and nothing else', () => {
+  assert.equal(isMarkedCopyPath('.dsh/git-mark/docs/note.md'), true)
+  assert.equal(isMarkedCopyPath('.dsh/git-mark/docs/指南.md'), true)
+  assert.equal(isMarkedCopyPath('docs/note.md'), false)
+  assert.equal(isMarkedCopyPath('.dsh/git-markers/x.md'), false)
+  assert.equal(isMarkedCopyPath('a/.dsh/git-mark.md'), false)
+  assert.equal(isMarkedCopyPath('docs/.dsh/git-mark/note.md'), true)
+  assert.equal(isMarkedCopyPath(undefined), false)
+  assert.equal(isMarkedCopyPath(''), false)
 })
 
 test('mergeOldNew marks Chinese per character', () => {

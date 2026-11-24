@@ -220,7 +220,7 @@ test('a nested repository inside a non-git workspace is still resolved', async (
   assert.equal(answer.body.lines[0].kind, 'modified')
 })
 
-test('the render route writes a marked copy under .dsh/git-mark and returns it', async () => {
+test('the render route writes a mirror copy under .dsh/git-mark and returns it', async () => {
   const root = await makeRepo()
   const edited = '# Note\n\nalpha keep changed\n\nomega keep\n'
   await writeFile(join(root, 'docs/note.md'), edited, 'utf8')
@@ -229,8 +229,10 @@ test('the render route writes a marked copy under .dsh/git-mark and returns it',
   const answer = await post(render, { sessionId: 'session-1', path: 'docs/note.md' })
   assert.equal(answer.status, 200)
   assert.equal(answer.body.kind, 'created')
-  assert.match(answer.body.path, /\.dsh[\\/]git-mark[\\/]note\.git-marked\.md$/)
-  assert.equal(answer.body.relativePath.replace(/\\/g, '/'), '.dsh/git-mark/note.git-marked.md')
+  // Mirror layout: same relative path under .dsh/git-mark, original basename.
+  assert.equal(answer.body.relativePath.replace(/\\/g, '/'), '.dsh/git-mark/docs/note.md')
+  assert.equal(answer.body.refreshed, false)
+  assert.equal(answer.body.sourcePath.replace(/\\/g, '/'), 'docs/note.md')
 
   const written = await readFile(answer.body.path, 'utf8')
   assert.ok(written.includes('data-gm="add"'), written)
@@ -244,6 +246,68 @@ test('the render route writes a marked copy under .dsh/git-mark and returns it',
 
   // The original file is untouched.
   assert.equal(await readFile(join(root, 'docs/note.md'), 'utf8'), edited)
+})
+
+test('mirror layout keeps basenames and nesting, including non-ASCII names', async () => {
+  const root = await makeRepo()
+  const { render } = mount({ cwd: root, sessions: ['session-1'] })
+  await writeFile(join(root, 'docs', '指南 笔记.md'), '# 指南\n\n第一行\n', 'utf8')
+  const answer = await post(render, { sessionId: 'session-1', path: 'docs/指南 笔记.md' })
+  assert.equal(answer.body.kind, 'created')
+  const expected = join(root, '.dsh', 'git-mark', 'docs', '指南 笔记.md')
+  assert.equal(answer.body.path, expected)
+  assert.equal(await readFile(expected, 'utf8'), '# 指南\n\n&#60;span data-gm="add"&#62;第一行&#60;/span&#62;\n')
+})
+
+test('a copy refresh regenerates the same mirror file from its source', async () => {
+  const root = await makeRepo()
+  const { render } = mount({ cwd: root, sessions: ['session-1'] })
+  const first = await post(render, { sessionId: 'session-1', path: 'docs/note.md' })
+  assert.equal(first.body.kind, 'created')
+  const copyPath = first.body.path
+  assert.equal(copyPath, join(root, '.dsh', 'git-mark', 'docs', 'note.md'))
+  const firstText = await readFile(copyPath, 'utf8')
+
+  // Now the source changes; refreshing the copy must regenerate in place.
+  await writeFile(join(root, 'docs/note.md'), '# Note\n\nalpha keep changed twice\n\nomega keep\n', 'utf8')
+  const second = await post(render, { sessionId: 'session-1', path: '.dsh/git-mark/docs/note.md' })
+  assert.equal(second.body.kind, 'created')
+  assert.equal(second.body.refreshed, true)
+  assert.equal(second.body.path, copyPath, 'refresh must overwrite the same copy')
+  assert.equal(second.body.sourcePath.replace(/\\/g, '/'), 'docs/note.md')
+
+  const secondText = await readFile(copyPath, 'utf8')
+  assert.ok(secondText.includes('changed twice'), secondText)
+  assert.notEqual(secondText, firstText)
+  // The mirror file is still the only copy: no “copy of a copy” was created.
+  assert.equal(copyPath, join(root, '.dsh', 'git-mark', 'docs', 'note.md'))
+  assert.match(await readFile(join(root, '.dsh', 'git-mark', 'docs', 'note.md'), 'utf8'), /changed twice/u)
+})
+
+test('a marked copy is never annotated by the facts route', async () => {
+  const root = await makeRepo()
+  const { render, facts } = mount({ cwd: root, sessions: ['session-1'] })
+  await post(render, { sessionId: 'session-1', path: 'docs/note.md' })
+  const answer = await get(facts, 'sessionId=session-1&path=.dsh/git-mark/docs/note.md')
+  assert.equal(answer.body.kind, 'not-git')
+})
+
+test('the render route answers no-source for a mark path whose source is missing', async () => {
+  const root = await makeRepo()
+  const { render } = mount({ cwd: root, sessions: ['session-1'] })
+  // `.dsh/git-mark/.dsh/git-mark/note.md` maps back into the mark tree.
+  const answer = await post(render, { sessionId: 'session-1', path: '.dsh/git-mark/.dsh/git-mark/note.md' })
+  assert.equal(answer.body.kind, 'no-source')
+})
+
+test('the render route refuses a copy path beyond the MAX_PATH bound', async () => {
+  const root = await makeRepo()
+  const deep = 'd'.repeat(240)
+  await mkdir(join(root, deep), { recursive: true })
+  await writeFile(join(root, deep, 'note.md'), '# Deep\n', 'utf8')
+  const { render } = mount({ cwd: root, sessions: ['session-1'] })
+  const answer = await post(render, { sessionId: 'session-1', path: `${deep}/note.md` })
+  assert.equal(answer.body.kind, 'toolong')
 })
 
 test('the render route marks an untracked file whole-green', async () => {
@@ -264,8 +328,7 @@ test('the render route reports not-git outside a repository and writes nothing',
   const { render } = mount({ cwd: plain, sessions: ['session-1'] })
   const answer = await post(render, { sessionId: 'session-1', path: 'note.md' })
   assert.equal(answer.body.kind, 'not-git')
-  const markDir = join(plain, '.dsh', 'git-mark')
-  await assert.rejects(readFile(join(markDir, 'note.git-marked.md'), 'utf8'))
+  await assert.rejects(readFile(join(plain, '.dsh', 'git-mark', 'note.md'), 'utf8'))
 })
 
 test('the render route accepts an absolute path inside the workspace', async () => {

@@ -17,9 +17,11 @@ var GIT_MARK_LOCALE = {
     'codeBlock.unwrap': '取消换行',
     'footnotes': '脚注',
     'render.label': 'Git 标注副本',
-    'render.title': '生成含 git 标注的副本并打开',
+    'render.title': '生成或刷新含 git 标注的副本',
     'render.tabTitle': '（git 标注）',
     'render.fail': '无法生成：非 git 仓库或读取失败',
+    'render.noSource': '无法更新：找不到该副本对应的源文件',
+    'render.refreshFallback': '副本已更新：请用标题栏的刷新按钮重新查看',
   },
   en: {
     'viewer.label': 'Markdown (git marked)',
@@ -30,9 +32,11 @@ var GIT_MARK_LOCALE = {
     'codeBlock.unwrap': 'Unwrap',
     'footnotes': 'Footnotes',
     'render.label': 'Git-marked copy',
-    'render.title': 'Generate a git-marked copy of this file and open it',
+    'render.title': 'Generate or refresh the git-marked copy',
     'render.tabTitle': ' (git marked)',
     'render.fail': 'Failed to generate: not a git repository or unreadable',
+    'render.noSource': 'Cannot update: the source file of this copy was not found',
+    'render.refreshFallback': 'Copy updated: press the header refresh button to view it',
   },
 }
 
@@ -49,6 +53,10 @@ function RenderMarkIcon(props) {
     d: 'M4 2h8v12l-1-.85L9.6 14l-1.6-1.15L6.4 14 5 13.15V2h1zM5 3v8h6V3z',
   }))
 }
+
+// Whether a file path is one of this plugin's marked copies (the mirror tree
+// below `.dsh/git-mark/`) — `isMarkedCopyPath` comes from the embedded core
+// (src/client/inject-core.js).
 
 /**
  * The Keyed document body: the builtin Markdown rendering, with change marks
@@ -86,7 +94,7 @@ function GitMarkBody(props) {
   var setMarks = state[1]
 
   React.useEffect(function () {
-    if (!isText || !complete || addressKey === undefined) {
+    if (!isText || !complete || addressKey === undefined || isMarkedCopyPath(filePath)) {
       setMarks(null)
       return undefined
     }
@@ -154,9 +162,12 @@ function GitMarkBody(props) {
  * The better-sidebar render button: ask the Host to write a git-marked copy
  * of the open file under `<workspace>/.dsh/git-mark/`, then open that copy so
  * better-sidebar renders the mixed Markdown/HTML document with its full
- * renderer. The marked document is produced purely from the raw source text —
- * no DOM involvement — and the marks are `data-gm` elements the stylesheet
- * (or the user's custom CSS) colors.
+ * renderer. When the open tab IS a marked copy, the same call refreshes the
+ * copy in place: the Host regenerates it from the copy's source, and the tab
+ * is closed and reopened so the fresh content shows (better-sidebar has no
+ * public reload). The marked document is produced purely from the raw source
+ * text — no DOM involvement — and the marks are `data-gm` elements the
+ * stylesheet (or the user's custom CSS) colors.
  * @param ctx - client plugin context.
  * @param context - the TabActionContext the editor header supplied.
  * @param copy - plugin locale resolver.
@@ -174,7 +185,8 @@ function runRenderMarked(ctx, context, copy) {
     .then(function (response) { return response.json() })
     .then(function (payload) {
       if (payload === null || payload.kind !== 'created') {
-        if (typeof fail === 'function') fail(copy('render.fail'))
+        var failKey = payload !== null && payload.kind === 'no-source' ? 'render.noSource' : 'render.fail'
+        if (typeof fail === 'function') fail(copy(failKey))
         return
       }
       var betterSidebar
@@ -183,12 +195,27 @@ function runRenderMarked(ctx, context, copy) {
       } catch (error) {
         betterSidebar = undefined
       }
-      if (betterSidebar === undefined || betterSidebar === null
-        || typeof betterSidebar.openTab !== 'function') {
+      if (betterSidebar === undefined || betterSidebar === null) {
         if (typeof fail === 'function') fail(copy('render.fail'))
         return
       }
-      betterSidebar.openTab({ type: 'editor', path: payload.path, title: path.split('/').pop() + copy('render.tabTitle') })
+      // Copy tabs are titled from the SOURCE file so they differ from the
+      // source's own tab when both are open.
+      var title = String(payload.sourcePath || path).split(/[\\/]/).pop() + copy('render.tabTitle')
+      if (payload.refreshed === true) {
+        // Refresh in place: close the current copy tab, then reopen the same
+        // path on the next tick so better-sidebar loads the regenerated file.
+        if (typeof betterSidebar.closeTab !== 'function' || typeof betterSidebar.openTab !== 'function') {
+          if (typeof fail === 'function') fail(copy('render.refreshFallback'))
+          return
+        }
+        betterSidebar.closeTab(context.tabId, { sessionId: sessionId })
+        setTimeout(function () {
+          betterSidebar.openTab({ type: 'editor', path: path, title: title, reveal: true })
+        }, 0)
+        return
+      }
+      betterSidebar.openTab({ type: 'editor', path: payload.path, title: title })
     })
     .catch(function () {
       if (typeof fail === 'function') fail(copy('render.fail'))

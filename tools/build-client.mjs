@@ -23,6 +23,7 @@ const CORE_EXPORTS = [
   'parseFileAddress',
   'gitMarkFileAddress',
   'markdownImageUrl',
+  'isMarkedCopyPath',
   'isFenceLine',
   'toggleFence',
   'isBlockLine',

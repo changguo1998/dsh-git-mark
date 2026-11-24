@@ -85,6 +85,22 @@ function isFenceLine(line) {
   return /^\s*(`{3,}|~{3,})/.test(line)
 }
 
+/**
+ * Whether a file path is one of the plugin's git-marked copies (the mirror tree
+ * below `.dsh/git-mark/`). Document bodies see forward-slash addresses, so the
+ * test is segment-based and separator-agnostic.
+ * @param filePath - the address path (workspace-relative or absolute).
+ * @returns true for a marked copy.
+ */
+function isMarkedCopyPath(filePath) {
+  if (typeof filePath !== 'string') return false
+  const parts = filePath.split('/')
+  for (let i = 0; i + 1 < parts.length; i++) {
+    if (parts[i] === '.dsh' && parts[i + 1] === 'git-mark') return true
+  }
+  return false
+}
+
 /** Toggle the running fence state over one line. */
 function toggleFence(fence, line) {
   const match = /^\s*(`{3,}|~{3,})/.exec(line)
